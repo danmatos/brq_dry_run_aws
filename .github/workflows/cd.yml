@@ -131,7 +131,7 @@ jobs:
         echo "MSK_BOOTSTRAP_SERVERS=$(terraform output -raw msk_bootstrap_servers)" >> $GITHUB_ENV
 
     - name: 📋 Upload Terraform State
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: terraform-outputs-${{ needs.setup.outputs.environment }}
         path: |
@@ -433,7 +433,7 @@ jobs:
         echo "\`\`\`" >> rollback-plan.md
 
     - name: 📋 Upload Rollback Plan
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: rollback-plan-${{ needs.setup.outputs.environment }}
         path: rollback-plan.md

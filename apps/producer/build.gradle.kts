@@ -45,8 +45,8 @@ dependencies {
     testImplementation("com.ninja-squad:springmockk:4.0.2")
     testImplementation("org.testcontainers:junit-jupiter:1.19.3")
     testImplementation("org.testcontainers:kafka:1.19.3")
-    testImplementation("io.kotest:kotest-runner-junit5:5.8.0")
-    testImplementation("io.kotest:kotest-assertions-core:5.8.0")
+    testImplementation("io.kotest:kotest-runner-junit5:6.0.4")
+    testImplementation("io.kotest:kotest-assertions-core:6.0.4")
     testImplementation("org.awaitility:awaitility-kotlin:4.2.0")
 }
 

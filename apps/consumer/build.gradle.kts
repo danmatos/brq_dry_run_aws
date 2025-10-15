@@ -17,7 +17,7 @@ dependencies {
     
     // Kafka
     implementation("org.springframework.kafka:spring-kafka")
-    implementation("software.amazon.msk:aws-msk-iam-auth:2.0.3")
+    implementation("software.amazon.msk:aws-msk-iam-auth:2.3.4")
     
     // JSON Processing
     implementation("com.fasterxml.jackson.core:jackson-databind:2.16.1")

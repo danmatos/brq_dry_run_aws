@@ -10,10 +10,10 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     
     // AWS SDK
-    implementation("software.amazon.awssdk:s3:2.25.11")
-    implementation("software.amazon.awssdk:dynamodb:2.25.11")
-    implementation("software.amazon.awssdk:ssm:2.25.11")
-    implementation("software.amazon.awssdk:sts:2.25.11")
+    implementation("software.amazon.awssdk:s3:2.35.7")
+    implementation("software.amazon.awssdk:dynamodb:2.35.7")
+    implementation("software.amazon.awssdk:ssm:2.35.7")
+    implementation("software.amazon.awssdk:sts:2.35.7")
     
     // Kafka
     implementation("org.springframework.kafka:spring-kafka")

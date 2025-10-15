@@ -77,7 +77,7 @@ jobs:
         ./gradlew dependencyCheckAnalyze --continue
 
     - name: 📋 Upload Dependency Check Report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: dependency-check-report
@@ -128,7 +128,7 @@ jobs:
         name: codecov-${{ matrix.module }}
 
     - name: 📋 Upload Test Results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: test-results-${{ matrix.module }}
@@ -189,7 +189,7 @@ jobs:
         ./gradlew integrationTest --continue
 
     - name: 📋 Upload Integration Test Results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: integration-test-results
@@ -302,7 +302,7 @@ jobs:
         # Add performance test execution here
 
     - name: 📊 Upload Performance Results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: performance-test-results

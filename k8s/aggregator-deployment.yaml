@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etl-aggregator
+  namespace: etl
+  labels:
+    app: etl-aggregator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etl-aggregator
+  template:
+    metadata:
+      labels:
+        app: etl-aggregator
+    spec:
+      serviceAccountName: sa-aggregator
+      containers:
+      - name: aggregator
+        image: AGGREGATOR_ECR_IMAGE # Replace with actual ECR image URL
+        ports:
+        - containerPort: 8082
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "KAFKA_BOOTSTRAP_SERVERS_PLACEHOLDER"
+        - name: KAFKA_CONSUMER_GROUP
+          value: "etl-aggregator-group"
+        - name: S3_REPORTS_BUCKET
+          value: "S3_REPORTS_BUCKET_PLACEHOLDER"
+        - name: KAFKA_TRANSACTIONS_TOPIC
+          value: "transactions"
+        - name: REPORT_GENERATION_CRON
+          value: "0 5 * * * *"  # Every hour at 5 minutes past
+        - name: SPRING_PROFILES_ACTIVE
+          value: "production"
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8082
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8082
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etl-aggregator-service
+  namespace: etl
+spec:
+  selector:
+    app: etl-aggregator
+  ports:
+  - protocol: TCP
+    port: 8082
+    targetPort: 8082
+  type: ClusterIP

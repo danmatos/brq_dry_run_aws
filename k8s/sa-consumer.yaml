@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-consumer
+  namespace: etl-ec2
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::521176574385:role/dry-run-brq-sa-consumer

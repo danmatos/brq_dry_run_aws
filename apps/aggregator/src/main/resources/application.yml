@@ -1,0 +1,51 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: etl-aggregator
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:etl-aggregator-group}
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+app:
+  s3:
+    reports-bucket: ${S3_REPORTS_BUCKET:}
+  kafka:
+    topics:
+      transactions: ${KAFKA_TRANSACTIONS_TOPIC:transactions}
+  scheduler:
+    report-generation-cron: ${REPORT_GENERATION_CRON:0 5 * * * *}  # Every hour at 5 minutes past
+    status-log-delay: ${STATUS_LOG_DELAY:300000}  # Every 5 minutes
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      cloudwatch:
+        enabled: true
+        namespace: ETL/Aggregator
+        step: 1m
+      prometheus:
+        enabled: true
+    tags:
+      application: etl-aggregator
+      environment: production
+
+logging:
+  level:
+    br.com.itau.etl: INFO
+    org.apache.kafka: WARN
+    software.amazon.awssdk: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

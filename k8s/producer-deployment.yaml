@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etl-producer
+  namespace: etl-ec2
+  labels:
+    app: etl-producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etl-producer
+  template:
+    metadata:
+      labels:
+        app: etl-producer
+    spec:
+      serviceAccountName: sa-producer
+      nodeSelector:
+        eks.amazonaws.com/nodegroup: workers
+      containers:
+      - name: producer
+        image: 521176574385.dkr.ecr.sa-east-1.amazonaws.com/dry-run-brq-producer:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: AWS_REGION
+          value: "sa-east-1"
+        - name: AWS_DEFAULT_REGION
+          value: "sa-east-1"
+        - name: AWS_SDK_REGION
+          value: "sa-east-1"
+        - name: JAVA_OPTS
+          value: "-Daws.region=sa-east-1 -Daws.defaultRegion=sa-east-1 -Dspring.cloud.aws.region.static=sa-east-1"
+        - name: SPRING_CLOUD_AWS_REGION_STATIC
+          value: "sa-east-1"
+        - name: PROJECT_NAME
+          value: "dry-run-brq"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "b-1.dryrunbrqmsk.cxgo3g.c2.kafka.sa-east-1.amazonaws.com:9098,b-2.dryrunbrqmsk.cxgo3g.c2.kafka.sa-east-1.amazonaws.com:9098"
+        - name: S3_INPUT_BUCKET
+          value: "dry-run-brq-input-521176574385"
+        - name: S3_REJECTED_BUCKET
+          value: "dry-run-brq-rejected-521176574385"
+        - name: DYNAMODB_PROCESSED_FILES_TABLE
+          value: "dry-run-brq-processed-files"
+        - name: KAFKA_TRANSACTIONS_TOPIC
+          value: "transactions"
+        - name: SPRING_PROFILES_ACTIVE
+          value: "production"
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etl-producer-service
+  namespace: etl
+spec:
+  selector:
+    app: etl-producer
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

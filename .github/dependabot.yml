@@ -1,0 +1,128 @@
+# 🤖 Dependabot Configuration
+version: 2
+
+updates:
+  # ================================
+  # Gradle Dependencies
+  # ================================
+  - package-ecosystem: "gradle"
+    directory: "/apps"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "@core-team"
+    assignees:
+      - "@tech-lead"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "gradle"
+      - "auto-update"
+    ignore:
+      # Ignore major version updates for Spring Boot
+      - dependency-name: "org.springframework.boot:*"
+        update-types: ["version-update:semver-major"]
+      # Ignore major version updates for Kotlin
+      - dependency-name: "org.jetbrains.kotlin:*"
+        update-types: ["version-update:semver-major"]
+
+  # ================================
+  # Docker Dependencies
+  # ================================
+  - package-ecosystem: "docker"
+    directory: "/apps/producer"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "America/Sao_Paulo"
+    reviewers:
+      - "@devops-team"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "producer"
+
+  - package-ecosystem: "docker"
+    directory: "/apps/consumer"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:30"
+      timezone: "America/Sao_Paulo"
+    reviewers:
+      - "@devops-team"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "consumer"
+
+  - package-ecosystem: "docker"
+    directory: "/apps/aggregator"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "10:00"
+      timezone: "America/Sao_Paulo"
+    reviewers:
+      - "@devops-team"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "aggregator"
+
+  # ================================
+  # Terraform Dependencies
+  # ================================
+  - package-ecosystem: "terraform"
+    directory: "/terraform"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+      timezone: "America/Sao_Paulo"
+    reviewers:
+      - "@infrastructure-team"
+    commit-message:
+      prefix: "terraform"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "terraform"
+      - "infrastructure"
+
+  # ================================
+  # GitHub Actions Dependencies
+  # ================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "09:00"
+      timezone: "America/Sao_Paulo"
+    reviewers:
+      - "@devops-team"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "ci-cd"

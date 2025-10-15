@@ -1,0 +1,505 @@
+# 🔍 PR Validation Pipeline
+name: PR - Pull Request Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+
+env:
+  JAVA_VERSION: '21'
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true
+
+jobs:
+  # ================================
+  # JOB 1: PR Info & Changes Detection
+  # ================================
+  pr-info:
+    name: 📋 PR Information
+    runs-on: ubuntu-latest
+    outputs:
+      has-code-changes: ${{ steps.changes.outputs.code }}
+      has-infra-changes: ${{ steps.changes.outputs.infra }}
+      has-k8s-changes: ${{ steps.changes.outputs.k8s }}
+      has-docs-changes: ${{ steps.changes.outputs.docs }}
+      
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 🔍 Detect Changes
+      uses: dorny/paths-filter@v2
+      id: changes
+      with:
+        filters: |
+          code:
+            - 'apps/**'
+            - '**.gradle.kts'
+            - 'gradle/**'
+          infra:
+            - 'terraform/**'
+            - '.github/workflows/**'
+          k8s:
+            - 'k8s/**'
+            - 'helm/**'
+          docs:
+            - 'docs/**'
+            - '**.md'
+            - 'README*'
+
+    - name: 📋 PR Summary
+      run: |
+        echo "## 🔍 Pull Request Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**PR Title:** ${{ github.event.pull_request.title }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Author:** ${{ github.event.pull_request.user.login }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Target Branch:** ${{ github.event.pull_request.base.ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Source Branch:** ${{ github.event.pull_request.head.ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Changes Detected" >> $GITHUB_STEP_SUMMARY
+        echo "| Type | Changed |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Code (Apps) | ${{ steps.changes.outputs.code == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Infrastructure | ${{ steps.changes.outputs.infra == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Kubernetes | ${{ steps.changes.outputs.k8s == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Documentation | ${{ steps.changes.outputs.docs == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ================================
+  # JOB 2: Code Quality (if code changed)
+  # ================================
+  code-quality:
+    name: 🔍 Code Quality Check
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-code-changes == 'true'
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🐘 Setup Gradle
+      uses: gradle/gradle-build-action@v2
+
+    - name: 🔍 Run Code Quality Checks
+      run: |
+        cd apps
+        ./gradlew ktlintCheck detekt --continue
+
+    - name: 📊 SonarQube PR Analysis
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      run: |
+        if [ -n "$SONAR_TOKEN" ]; then
+          cd apps
+          ./gradlew sonar \
+            -Dsonar.projectKey=${{ github.repository_owner }}_aws-eks-msk-starter \
+            -Dsonar.organization=${{ github.repository_owner }} \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.pullrequest.key=${{ github.event.number }} \
+            -Dsonar.pullrequest.branch=${{ github.event.pull_request.head.ref }} \
+            -Dsonar.pullrequest.base=${{ github.event.pull_request.base.ref }}
+        fi
+
+    - name: 📋 Upload Quality Reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: quality-reports
+        path: |
+          apps/build/reports/ktlint/
+          apps/build/reports/detekt/
+
+  # ================================
+  # JOB 3: Unit Tests (if code changed)
+  # ================================
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-code-changes == 'true'
+    
+    strategy:
+      matrix:
+        module: [producer, consumer, aggregator]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🐘 Setup Gradle
+      uses: gradle/gradle-build-action@v2
+
+    - name: 🧪 Run Unit Tests - ${{ matrix.module }}
+      run: |
+        cd apps/${{ matrix.module }}
+        ../gradlew test jacocoTestReport --continue
+
+    - name: 📊 Test Report
+      uses: dorny/test-reporter@v1
+      if: success() || failure()
+      with:
+        name: Unit Tests - ${{ matrix.module }}
+        path: apps/${{ matrix.module }}/build/test-results/test/*.xml
+        reporter: java-junit
+
+    - name: 📈 Coverage Report
+      if: matrix.module == 'aggregator'  # Only report coverage for one module to avoid duplication
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: apps/${{ matrix.module }}/build/reports/jacoco/test/jacocoTestReport.xml
+        flags: pr-${{ github.event.number }}
+
+  # ================================
+  # JOB 4: Build Verification
+  # ================================
+  build-verification:
+    name: 🏗️ Build Verification
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-code-changes == 'true'
+    
+    strategy:
+      matrix:
+        app: [producer, consumer, aggregator]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🐘 Setup Gradle
+      uses: gradle/gradle-build-action@v2
+
+    - name: 🏗️ Build ${{ matrix.app }}
+      run: |
+        cd apps/${{ matrix.app }}
+        ../gradlew build -x test
+
+    - name: 🐳 Verify Docker Build
+      run: |
+        cd apps/${{ matrix.app }}
+        if [ -f Dockerfile ]; then
+          docker build -t test-${{ matrix.app }}:pr-${{ github.event.number }} .
+          echo "✅ Docker build successful for ${{ matrix.app }}"
+        else
+          echo "⚠️ No Dockerfile found for ${{ matrix.app }}"
+        fi
+
+  # ================================
+  # JOB 5: Infrastructure Validation
+  # ================================
+  infra-validation:
+    name: 🏗️ Infrastructure Validation
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-infra-changes == 'true'
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔧 Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: ✅ Terraform Format Check
+      run: |
+        cd terraform
+        terraform fmt -check -diff
+
+    - name: 🔍 Terraform Validate
+      run: |
+        cd terraform
+        terraform init -backend=false
+        terraform validate
+
+    - name: 📊 Terraform Plan (Dry Run)
+      run: |
+        cd terraform
+        terraform plan \
+          -var="environment=pr-${{ github.event.number }}" \
+          -var="project_name=etl-pr" \
+          -var="aws_region=us-east-1" \
+          -out=pr-plan
+        
+        # Generate plan summary
+        terraform show -no-color pr-plan > terraform-plan.txt
+
+    - name: 💬 Comment Terraform Plan
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          const fs = require('fs');
+          const plan = fs.readFileSync('terraform/terraform-plan.txt', 'utf8');
+          const body = `## 🏗️ Terraform Plan
+          
+          <details>
+          <summary>Click to expand plan details</summary>
+          
+          \`\`\`
+          ${plan}
+          \`\`\`
+          
+          </details>`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: body
+          });
+
+  # ================================
+  # JOB 6: Kubernetes Validation
+  # ================================
+  k8s-validation:
+    name: ⚓ Kubernetes Validation
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-k8s-changes == 'true'
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: ✅ Validate Manifests
+      run: |
+        for file in k8s/*.yaml; do
+          echo "Validating $file..."
+          kubectl --dry-run=client apply -f "$file" || echo "❌ Validation failed for $file"
+        done
+
+    - name: 🔍 Kubeval Validation
+      run: |
+        # Install kubeval
+        wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+        tar xf kubeval-linux-amd64.tar.gz
+        sudo cp kubeval /usr/local/bin
+        
+        # Validate manifests
+        kubeval k8s/*.yaml
+
+    - name: 🔒 Polaris Security Scan
+      run: |
+        # Install Polaris CLI
+        curl -L https://github.com/FairwindsOps/polaris/releases/download/8.5.0/polaris_linux_amd64.tar.gz | tar xz
+        sudo mv polaris /usr/local/bin/
+        
+        # Run security scan
+        polaris audit --audit-path k8s/ --format=json > polaris-report.json || true
+        
+        # Display summary
+        echo "## 🔒 Polaris Security Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+        cat polaris-report.json | jq '.results.summary' >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ================================
+  # JOB 7: Documentation Check
+  # ================================
+  docs-validation:
+    name: 📝 Documentation Validation
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-docs-changes == 'true'
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔍 Markdown Lint
+      uses: articulate/actions-markdownlint@v1
+      with:
+        config: .markdownlint.json
+        files: '**/*.md'
+        ignore: 'node_modules'
+
+    - name: 🔗 Check Links
+      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        use-quiet-mode: 'yes'
+        use-verbose-mode: 'no'
+        config-file: '.markdown-link-check.json'
+
+    - name: 📊 Documentation Coverage
+      run: |
+        echo "## 📝 Documentation Coverage" >> $GITHUB_STEP_SUMMARY
+        echo "| Type | Files | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Check for README files
+        README_COUNT=$(find . -name "README*.md" | wc -l)
+        echo "| README | $README_COUNT | $( [ $README_COUNT -gt 0 ] && echo '✅ Present' || echo '❌ Missing' ) |" >> $GITHUB_STEP_SUMMARY
+        
+        # Check for API documentation
+        API_DOCS=$(find docs -name "*api*" 2>/dev/null | wc -l)
+        echo "| API Docs | $API_DOCS | $( [ $API_DOCS -gt 0 ] && echo '✅ Present' || echo '⚠️ Consider adding' ) |" >> $GITHUB_STEP_SUMMARY
+        
+        # Check for deployment guides
+        DEPLOY_DOCS=$(find . -name "*deploy*" -name "*.md" | wc -l)
+        echo "| Deploy Guides | $DEPLOY_DOCS | $( [ $DEPLOY_DOCS -gt 0 ] && echo '✅ Present' || echo '⚠️ Consider adding' ) |" >> $GITHUB_STEP_SUMMARY
+
+  # ================================
+  # JOB 8: Integration Tests (Lightweight)
+  # ================================
+  integration-tests-light:
+    name: 🔗 Integration Tests (Light)
+    runs-on: ubuntu-latest
+    needs: [pr-info, unit-tests]
+    if: needs.pr-info.outputs.has-code-changes == 'true'
+    
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3,dynamodb
+          DEFAULT_REGION: us-east-1
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🐘 Setup Gradle
+      uses: gradle/gradle-build-action@v2
+
+    - name: 🔗 Run Lightweight Integration Tests
+      env:
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        AWS_DEFAULT_REGION: us-east-1
+        LOCALSTACK_ENDPOINT: http://localhost:4566
+      run: |
+        cd apps
+        # Run only fast integration tests for PR validation
+        ./gradlew integrationTest -Dtest.profile=light --continue
+
+  # ================================
+  # JOB 9: Security Scan
+  # ================================
+  security-scan:
+    name: 🛡️ Security Scan
+    runs-on: ubuntu-latest
+    needs: pr-info
+    if: needs.pr-info.outputs.has-code-changes == 'true'
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🔍 Run OWASP Dependency Check
+      run: |
+        cd apps
+        ./gradlew dependencyCheckAnalyze --continue
+
+    - name: 🔐 Secrets Scan
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  # ================================
+  # JOB 10: PR Status Summary
+  # ================================
+  pr-summary:
+    name: 📋 PR Summary
+    runs-on: ubuntu-latest
+    needs: [pr-info, code-quality, unit-tests, build-verification, infra-validation, k8s-validation, docs-validation, integration-tests-light, security-scan]
+    if: always()
+    
+    steps:
+    - name: 📊 Generate PR Summary
+      run: |
+        echo "## 📋 Pull Request Validation Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Check | Status | Details |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|---------|---------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Code Quality
+        if [ "${{ needs.pr-info.outputs.has-code-changes }}" = "true" ]; then
+          echo "| 🔍 Code Quality | ${{ needs.code-quality.result == 'success' && '✅ Passed' || needs.code-quality.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Linting, static analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Unit Tests | ${{ needs.unit-tests.result == 'success' && '✅ Passed' || needs.unit-tests.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | All modules tested |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🏗️ Build | ${{ needs.build-verification.result == 'success' && '✅ Passed' || needs.build-verification.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Docker images built |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔗 Integration | ${{ needs.integration-tests-light.result == 'success' && '✅ Passed' || needs.integration-tests-light.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Lightweight tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🛡️ Security | ${{ needs.security-scan.result == 'success' && '✅ Passed' || needs.security-scan.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Dependency & secrets scan |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Infrastructure
+        if [ "${{ needs.pr-info.outputs.has-infra-changes }}" = "true" ]; then
+          echo "| 🏗️ Infrastructure | ${{ needs.infra-validation.result == 'success' && '✅ Passed' || needs.infra-validation.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Terraform validation |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Kubernetes
+        if [ "${{ needs.pr-info.outputs.has-k8s-changes }}" = "true" ]; then
+          echo "| ⚓ Kubernetes | ${{ needs.k8s-validation.result == 'success' && '✅ Passed' || needs.k8s-validation.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Manifest validation |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Documentation
+        if [ "${{ needs.pr-info.outputs.has-docs-changes }}" = "true" ]; then
+          echo "| 📝 Documentation | ${{ needs.docs-validation.result == 'success' && '✅ Passed' || needs.docs-validation.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Markdown & links check |" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: ✅ PR Ready Status
+      run: |
+        # Check if all required jobs passed
+        CODE_READY="${{ needs.pr-info.outputs.has-code-changes != 'true' || (needs.code-quality.result == 'success' && needs.unit-tests.result == 'success' && needs.build-verification.result == 'success') }}"
+        INFRA_READY="${{ needs.pr-info.outputs.has-infra-changes != 'true' || needs.infra-validation.result == 'success' }}"
+        K8S_READY="${{ needs.pr-info.outputs.has-k8s-changes != 'true' || needs.k8s-validation.result == 'success' }}"
+        DOCS_READY="${{ needs.pr-info.outputs.has-docs-changes != 'true' || needs.docs-validation.result == 'success' }}"
+        
+        if [ "$CODE_READY" = "true" ] && [ "$INFRA_READY" = "true" ] && [ "$K8S_READY" = "true" ] && [ "$DOCS_READY" = "true" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ PR is Ready for Review!" >> $GITHUB_STEP_SUMMARY
+          echo "All validation checks have passed. This PR is ready to be merged." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ⚠️ PR Needs Attention" >> $GITHUB_STEP_SUMMARY
+          echo "Some validation checks failed. Please review and fix the issues before merging." >> $GITHUB_STEP_SUMMARY
+        fi

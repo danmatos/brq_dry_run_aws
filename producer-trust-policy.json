@@ -1,0 +1,25 @@
+﻿{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::521176574385:oidc-provider/oidc.eks.sa-east-1.amazonaws.com/id/0EACAF9D7E1BC9FF55737D1376590A15"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.eks.sa-east-1.amazonaws.com/id/0EACAF9D7E1BC9FF55737D1376590A15:sub": [
+            "system:serviceaccount:etl:sa-producer",
+            "system:serviceaccount:etl:sa-consumer", 
+            "system:serviceaccount:etl:sa-aggregator",
+            "system:serviceaccount:etl-ec2:sa-producer",
+            "system:serviceaccount:etl-ec2:sa-consumer",
+            "system:serviceaccount:etl-ec2:sa-aggregator"
+          ],
+          "oidc.eks.sa-east-1.amazonaws.com/id/0EACAF9D7E1BC9FF55737D1376590A15:aud": "sts.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

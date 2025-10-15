@@ -1,0 +1,467 @@
+# 🏷️ Release Pipeline
+name: Release - Create Release & Deploy
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes'
+        required: false
+        type: string
+        default: 'See CHANGELOG.md for details'
+
+env:
+  JAVA_VERSION: '21'
+  AWS_REGION: us-east-1
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ================================
+  # JOB 1: Validate Release
+  # ================================
+  validate-release:
+    name: ✅ Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_hotfix: ${{ steps.version.outputs.is_hotfix }}
+      
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 🏷️ Extract Version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION=${GITHUB_REF#refs/tags/}
+        fi
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        # Check if it's a hotfix (patch version > 0)
+        if [[ $VERSION =~ v[0-9]+\.[0-9]+\.[1-9][0-9]*$ ]]; then
+          echo "is_hotfix=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_hotfix=false" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "Release version: $VERSION"
+        echo "Is hotfix: $([ '${{ steps.version.outputs.is_hotfix }}' = 'true' ] && echo 'Yes' || echo 'No')"
+
+    - name: ✅ Validate Version Format
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        if ! [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "❌ Invalid version format: $VERSION"
+          echo "Expected format: v1.0.0"
+          exit 1
+        fi
+
+    - name: 🔍 Check if Tag Already Exists
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        if git tag -l | grep -q "^$VERSION$"; then
+          echo "❌ Tag $VERSION already exists!"
+          exit 1
+        fi
+
+    - name: 📋 Generate Release Summary
+      run: |
+        echo "## 🏷️ Release Information" >> $GITHUB_STEP_SUMMARY
+        echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Version | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Type | ${{ steps.version.outputs.is_hotfix == 'true' && '🔥 Hotfix' || '🚀 Regular Release' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ================================
+  # JOB 2: Build Release Artifacts
+  # ================================
+  build-release:
+    name: 🏗️ Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: validate-release
+    
+    strategy:
+      matrix:
+        app: [producer, consumer, aggregator]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🐘 Setup Gradle
+      uses: gradle/gradle-build-action@v2
+
+    - name: 🏗️ Build Release JAR
+      run: |
+        cd apps/${{ matrix.app }}
+        # Update version in build.gradle.kts
+        sed -i "s/version = .*/version = \"${{ needs.validate-release.outputs.version }}\"/" build.gradle.kts
+        ../gradlew clean build -Prelease=true
+
+    - name: 🔑 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 🏷️ Extract Metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.app }}
+        tags: |
+          type=semver,pattern={{version}},value=${{ needs.validate-release.outputs.version }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release.outputs.version }}
+          type=semver,pattern={{major}},value=${{ needs.validate-release.outputs.version }}
+          type=raw,value=latest
+
+    - name: 🔧 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 🐳 Build and Push Release Images
+      uses: docker/build-push-action@v5
+      with:
+        context: apps/${{ matrix.app }}
+        file: apps/${{ matrix.app }}/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+        build-args: |
+          VERSION=${{ needs.validate-release.outputs.version }}
+          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          COMMIT=${{ github.sha }}
+
+    - name: 📋 Upload Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-artifacts-${{ matrix.app }}
+        path: |
+          apps/${{ matrix.app }}/build/libs/*.jar
+          apps/${{ matrix.app }}/build/reports/
+        retention-days: 30
+
+  # ================================
+  # JOB 3: Generate Release Notes
+  # ================================
+  generate-release-notes:
+    name: 📝 Generate Release Notes
+    runs-on: ubuntu-latest
+    needs: validate-release
+    outputs:
+      release-notes: ${{ steps.notes.outputs.notes }}
+      
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 📝 Generate Release Notes
+      id: notes
+      run: |
+        VERSION="${{ needs.validate-release.outputs.version }}"
+        
+        # Get previous tag
+        PREVIOUS_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
+        if [ -z "$PREVIOUS_TAG" ]; then
+          PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+        fi
+        
+        echo "Generating release notes from $PREVIOUS_TAG to $VERSION"
+        
+        # Generate changelog
+        cat > release_notes.md << EOF
+        # Release $VERSION
+        
+        ## 🚀 What's New
+        
+        $(git log $PREVIOUS_TAG..HEAD --pretty=format:"- %s (%h)" --grep="feat" --grep="add" --grep="implement" | head -10)
+        
+        ## 🐛 Bug Fixes
+        
+        $(git log $PREVIOUS_TAG..HEAD --pretty=format:"- %s (%h)" --grep="fix" --grep="bug" | head -10)
+        
+        ## 🔧 Improvements
+        
+        $(git log $PREVIOUS_TAG..HEAD --pretty=format:"- %s (%h)" --grep="improve" --grep="enhance" --grep="update" | head -10)
+        
+        ## 📊 Statistics
+        
+        - **Commits:** $(git rev-list $PREVIOUS_TAG..HEAD --count)
+        - **Contributors:** $(git shortlog -sn $PREVIOUS_TAG..HEAD | wc -l)
+        - **Files Changed:** $(git diff --name-only $PREVIOUS_TAG..HEAD | wc -l)
+        
+        ## 🐳 Docker Images
+        
+        - \`ghcr.io/${{ github.repository }}-producer:$VERSION\`
+        - \`ghcr.io/${{ github.repository }}-consumer:$VERSION\`
+        - \`ghcr.io/${{ github.repository }}-aggregator:$VERSION\`
+        
+        ## 📦 Installation
+        
+        \`\`\`bash
+        # Update image tags in your Kubernetes manifests
+        kubectl set image deployment/etl-producer etl-producer=ghcr.io/${{ github.repository }}-producer:$VERSION -n etl
+        kubectl set image deployment/etl-consumer etl-consumer=ghcr.io/${{ github.repository }}-consumer:$VERSION -n etl
+        kubectl set image deployment/etl-aggregator etl-aggregator=ghcr.io/${{ github.repository }}-aggregator:$VERSION -n etl
+        \`\`\`
+        
+        ---
+        
+        **Full Changelog:** [$PREVIOUS_TAG...$VERSION](https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...$VERSION)
+        EOF
+        
+        # Set output
+        {
+          echo 'notes<<EOF'
+          cat release_notes.md
+          echo EOF
+        } >> $GITHUB_OUTPUT
+
+    - name: 📋 Upload Release Notes
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-notes
+        path: release_notes.md
+
+  # ================================
+  # JOB 4: Run Release Tests
+  # ================================
+  release-tests:
+    name: 🧪 Release Tests
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-release]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: 🐘 Setup Gradle
+      uses: gradle/gradle-build-action@v2
+
+    - name: 🧪 Run Full Test Suite
+      run: |
+        cd apps
+        ./gradlew test integrationTest --continue
+
+    - name: 🚀 Run Performance Tests
+      if: needs.validate-release.outputs.is_hotfix != 'true'
+      run: |
+        cd tests
+        echo "Running performance tests for release validation..."
+        # Add performance test execution here
+
+    - name: 📊 Upload Test Results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: release-test-results
+        path: |
+          apps/build/test-results/
+          apps/build/reports/
+
+  # ================================
+  # JOB 5: Security Scan
+  # ================================
+  security-scan:
+    name: 🛡️ Security Scan
+    runs-on: ubuntu-latest
+    needs: build-release
+    
+    strategy:
+      matrix:
+        app: [producer, consumer, aggregator]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔍 Scan Release Image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ghcr.io/${{ github.repository }}-${{ matrix.app }}:${{ needs.validate-release.outputs.version }}
+        format: 'sarif'
+        output: 'trivy-results-${{ matrix.app }}.sarif'
+
+    - name: 📋 Upload Security Scan Results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results-${{ matrix.app }}.sarif'
+
+  # ================================
+  # JOB 6: Create GitHub Release
+  # ================================
+  create-release:
+    name: 🏷️ Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-release, generate-release-notes, release-tests]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 📥 Download Release Artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts/
+
+    - name: 🏷️ Create Release Tag
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "${{ needs.validate-release.outputs.version }}" -m "Release ${{ needs.validate-release.outputs.version }}"
+        git push origin "${{ needs.validate-release.outputs.version }}"
+
+    - name: 🚀 Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.validate-release.outputs.version }}
+        name: Release ${{ needs.validate-release.outputs.version }}
+        body: ${{ needs.generate-release-notes.outputs.release-notes }}
+        draft: false
+        prerelease: ${{ needs.validate-release.outputs.is_hotfix == 'true' }}
+        files: |
+          artifacts/release-artifacts-*/apps/*/build/libs/*.jar
+        generate_release_notes: false
+
+  # ================================
+  # JOB 7: Deploy to Production
+  # ================================
+  deploy-production:
+    name: 🚀 Deploy to Production
+    uses: ./.github/workflows/cd.yml
+    needs: [validate-release, create-release]
+    if: needs.validate-release.outputs.is_hotfix != 'true'  # Regular releases auto-deploy
+    secrets: inherit
+    with:
+      environment: production
+
+  # ================================
+  # JOB 8: Update Documentation
+  # ================================
+  update-docs:
+    name: 📝 Update Documentation
+    runs-on: ubuntu-latest
+    needs: [validate-release, create-release]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 📝 Update Version in Documentation
+      run: |
+        VERSION="${{ needs.validate-release.outputs.version }}"
+        
+        # Update README.md with new version
+        sed -i "s/ghcr\.io\/.*-producer:[^`]*/ghcr.io\/${{ github.repository }}-producer:$VERSION/g" README.md
+        sed -i "s/ghcr\.io\/.*-consumer:[^`]*/ghcr.io\/${{ github.repository }}-consumer:$VERSION/g" README.md
+        sed -i "s/ghcr\.io\/.*-aggregator:[^`]*/ghcr.io\/${{ github.repository }}-aggregator:$VERSION/g" README.md
+        
+        # Update Kubernetes manifests
+        find k8s/ -name "*.yaml" -exec sed -i "s/image: ghcr\.io\/.*:/image: ghcr.io\/${{ github.repository }}-/g" {} \;
+        find k8s/ -name "*.yaml" -exec sed -i "s/:latest/:$VERSION/g" {} \;
+
+    - name: 📤 Commit Documentation Updates
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        if git diff --quiet; then
+          echo "No documentation changes needed"
+        else
+          git add .
+          git commit -m "docs: update version references to ${{ needs.validate-release.outputs.version }}"
+          git push
+        fi
+
+  # ================================
+  # JOB 9: Notification
+  # ================================
+  notify-release:
+    name: 📢 Notify Release
+    runs-on: ubuntu-latest
+    needs: [validate-release, create-release, deploy-production]
+    if: always()
+    
+    steps:
+    - name: 📢 Notify Success
+      if: needs.create-release.result == 'success'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        channel: '#releases'
+        text: |
+          🎉 Release ${{ needs.validate-release.outputs.version }} is Live!
+          
+          **Type:** ${{ needs.validate-release.outputs.is_hotfix == 'true' && '🔥 Hotfix Release' || '🚀 Major Release' }}
+          **Repository:** ${{ github.repository }}
+          **Release Notes:** https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-release.outputs.version }}
+          
+          **Docker Images:**
+          - \`ghcr.io/${{ github.repository }}-producer:${{ needs.validate-release.outputs.version }}\`
+          - \`ghcr.io/${{ github.repository }}-consumer:${{ needs.validate-release.outputs.version }}\`
+          - \`ghcr.io/${{ github.repository }}-aggregator:${{ needs.validate-release.outputs.version }}\`
+          
+          ${{ needs.validate-release.outputs.is_hotfix != 'true' && '🚀 **Deployed to Production**' || '⚠️ **Manual deployment required for hotfix**' }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: 📢 Notify Failure
+      if: needs.create-release.result == 'failure'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        channel: '#releases'
+        text: |
+          ❌ Release ${{ needs.validate-release.outputs.version }} Failed!
+          
+          **Repository:** ${{ github.repository }}
+          **Workflow:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          Please check the workflow logs and retry the release.
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: 📊 Update Release Dashboard
+      run: |
+        echo "## 🏷️ Latest Release: ${{ needs.validate-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** ${{ needs.create-release.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Type:** ${{ needs.validate-release.outputs.is_hotfix == 'true' && '🔥 Hotfix' || '🚀 Regular Release' }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Deployment:** ${{ needs.deploy-production.result == 'success' && '✅ Deployed' || needs.validate-release.outputs.is_hotfix == 'true' && '⚠️ Manual Required' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY

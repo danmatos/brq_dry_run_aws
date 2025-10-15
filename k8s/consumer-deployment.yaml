@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etl-consumer
+  namespace: etl-ec2
+  labels:
+    app: etl-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etl-consumer
+  template:
+    metadata:
+      labels:
+        app: etl-consumer
+    spec:
+      serviceAccountName: sa-consumer
+      nodeSelector:
+        eks.amazonaws.com/nodegroup: workers
+      containers:
+      - name: consumer
+        image: 521176574385.dkr.ecr.sa-east-1.amazonaws.com/dry-run-brq-consumer:latest
+        ports:
+        - containerPort: 8081
+        env:
+        - name: AWS_REGION
+          value: "sa-east-1"
+        - name: AWS_DEFAULT_REGION
+          value: "sa-east-1"
+        - name: AWS_SDK_REGION
+          value: "sa-east-1"
+        - name: JAVA_OPTS
+          value: "-Daws.region=sa-east-1 -Daws.defaultRegion=sa-east-1 -Dspring.cloud.aws.region.static=sa-east-1"
+        - name: SPRING_CLOUD_AWS_REGION_STATIC
+          value: "sa-east-1"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "b-1.dryrunbrqmsk.cxgo3g.c2.kafka.sa-east-1.amazonaws.com:9098,b-2.dryrunbrqmsk.cxgo3g.c2.kafka.sa-east-1.amazonaws.com:9098"
+        - name: KAFKA_CONSUMER_GROUP
+          value: "etl-consumer-group"
+        - name: DYNAMODB_TRANSACTIONS_TABLE
+          value: "dry-run-brq-transactions"
+        - name: KAFKA_TRANSACTIONS_TOPIC
+          value: "transactions"
+        - name: SPRING_PROFILES_ACTIVE
+          value: "production"
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8081
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etl-consumer-service
+  namespace: etl
+spec:
+  selector:
+    app: etl-consumer
+  ports:
+  - protocol: TCP
+    port: 8081
+    targetPort: 8081
+  type: ClusterIP

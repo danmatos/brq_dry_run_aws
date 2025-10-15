@@ -1,0 +1,121 @@
+# Gradle
+.gradle/
+build/
+**/build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Dependencies
+node_modules/
+
+# Coverage reports
+coverage/
+**/jacoco.exec
+**/jacoco-it.exec
+
+# Test output
+test-output/
+**/test-results/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.tfplan
+crash.log
+
+# AWS
+.aws/
+aws-exports.js
+
+# Kubernetes
+kubeconfig
+
+# Local environment variables
+.env
+.env.local
+.env.production
+.env.test
+
+# Build artifacts
+*.jar
+*.war
+*.ear
+
+# Application specific
+deployment-logs/
+monitoring-data/
+performance-reports/
+
+# Demo outputs
+demo-outputs.json
+demo-script.ps1
+
+# Docker
+.dockerignore
+Dockerfile.tmp
+
+# Helm
+charts/**/values-*.yaml
+charts/**/secrets/
+
+# Generated documentation
+docs/api/
+docs/coverage/
+
+# Security
+*.pem
+*.key
+*.crt
+secrets/
+.secrets/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+.cache/
+.npm/
+.yarn/
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# JVM
+hs_err_pid*
+replay_pid*

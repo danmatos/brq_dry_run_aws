@@ -1,0 +1,48 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: etl-consumer
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:etl-consumer-group}
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+app:
+  dynamodb:
+    transactions-table: ${DYNAMODB_TRANSACTIONS_TABLE:}
+  kafka:
+    topics:
+      transactions: ${KAFKA_TRANSACTIONS_TOPIC:transactions}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      cloudwatch:
+        enabled: true
+        namespace: ETL/Consumer
+        step: 1m
+      prometheus:
+        enabled: true
+    tags:
+      application: etl-consumer
+      environment: production
+
+logging:
+  level:
+    br.com.itau.etl: INFO
+    org.apache.kafka: WARN
+    software.amazon.awssdk: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

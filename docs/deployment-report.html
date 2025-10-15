@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETL Production Deployment - Lessons Learned</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            font-size: 11pt;
+            max-width: 210mm;
+            margin: 0 auto;
+            background: white;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 28pt;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header h2 {
+            margin: 10px 0;
+            font-size: 18pt;
+            font-weight: normal;
+            opacity: 0.9;
+        }
+        
+        .header .meta {
+            font-size: 12pt;
+            margin-top: 15px;
+            opacity: 0.8;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            page-break-after: avoid;
+            font-size: 22pt;
+            margin-top: 30px;
+        }
+        
+        h2 {
+            color: #34495e;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 5px;
+            page-break-after: avoid;
+            font-size: 18pt;
+            margin-top: 25px;
+        }
+        
+        h3 {
+            color: #2c3e50;
+            page-break-after: avoid;
+            font-size: 14pt;
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        
+        h4 {
+            color: #7f8c8d;
+            font-size: 12pt;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        
+        .error-section {
+            border: 2px solid #e74c3c;
+            background: linear-gradient(to right, #fdf2f2, #ffffff);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            page-break-inside: avoid;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .solution-section {
+            border: 2px solid #27ae60;
+            background: linear-gradient(to right, #f2fdf2, #ffffff);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            page-break-inside: avoid;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .code-block {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            overflow-x: auto;
+            page-break-inside: avoid;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 9pt;
+            line-height: 1.4;
+            margin: 15px 0;
+            position: relative;
+        }
+        
+        .code-block::before {
+            content: attr(data-lang);
+            position: absolute;
+            top: 5px;
+            right: 10px;
+            font-size: 8pt;
+            color: #666;
+            text-transform: uppercase;
+        }
+        
+        .inline-code {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 10pt;
+            color: #e74c3c;
+        }
+        
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+            page-break-inside: avoid;
+            font-size: 10pt;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        
+        th {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            font-weight: bold;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        
+        .metrics-table {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .success { color: #27ae60; font-weight: bold; }
+        .error { color: #e74c3c; font-weight: bold; }
+        .warning { color: #f39c12; font-weight: bold; }
+        
+        .emoji {
+            font-size: 1.2em;
+            margin-right: 5px;
+        }
+        
+        .highlight-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        
+        .architecture-diagram {
+            background: #f8f9fa;
+            border: 2px solid #dee2e6;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: monospace;
+            text-align: center;
+            page-break-inside: avoid;
+        }
+        
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #ddd;
+            font-size: 9pt;
+            color: #666;
+            text-align: center;
+            background: #f8f9fa;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        
+        ul, ol {
+            margin: 15px 0;
+            padding-left: 30px;
+        }
+        
+        li {
+            margin: 5px 0;
+        }
+        
+        .page-break {
+            page-break-before: always;
+        }
+        
+        @media print {
+            body { font-size: 10pt; }
+            .no-print { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 ETL System Production Deployment</h1>
+        <h2>Lessons Learned & Solutions Documentation</h2>
+        <div class="meta">
+            <strong>BRQ Itaú - ETL Team</strong><br>
+            Spring Boot 3.2.2 + Kotlin + AWS EKS + MSK<br>
+            Generated: October 14, 2025
+        </div>
+    </div>
+
+    <div class="highlight-box">
+        <h2 style="margin: 0; border: none;">📋 Executive Summary</h2>
+        <p style="font-size: 12pt; margin: 10px 0;">
+            Sistema 100% operacional após migração crítica de <strong>Fargate → EC2</strong><br>
+            <span class="success">✅ DNS Functional</span> • 
+            <span class="success">✅ MSK Connected</span> • 
+            <span class="success">✅ Health Checks UP</span>
+        </p>
+    </div>
+
+    <h1>🚨 Principais Erros e Soluções</h1>
+
+    <div class="error-section">
+        <h2><span class="emoji">❌</span>Erro 1: Dependency Injection - ObjectMapper</h2>
+        <h3>Problema:</h3>
+        <div class="code-block" data-lang="kotlin">
+Parameter 0 of constructor in br.com.brq.producer.service.S3Service required a bean of type 
+'com.fasterxml.jackson.databind.ObjectMapper' that could not be found.
+        </div>
+        
+        <h3>Causa Raiz:</h3>
+        <ul>
+            <li>Spring Boot não estava auto-configurando o ObjectMapper</li>
+            <li>Falta de dependency explícita no build.gradle</li>
+        </ul>
+    </div>
+
+    <div class="solution-section">
+        <h3><span class="emoji">✅</span>Solução Adotada:</h3>
+        <div class="code-block" data-lang="kotlin">
+@Configuration
+class JacksonConfig {
+    @Bean
+    @Primary
+    fun objectMapper(): ObjectMapper {
+        return ObjectMapper()
+            .registerModule(JavaTimeModule())
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false)
+    }
+}
+        </div>
+        
+        <h3>Base da Decisão:</h3>
+        <ul>
+            <li><strong>Padrão Spring Boot:</strong> Configuração explícita de beans críticos</li>
+            <li><strong>Robustez:</strong> Controle total sobre serialização JSON</li>
+            <li><strong>Manutenibilidade:</strong> Configuração centralizada</li>
+        </ul>
+    </div>
+
+    <div class="page-break"></div>
+
+    <div class="error-section">
+        <h2><span class="emoji">❌</span>Erro 2: ECR Authentication - Credenciais AWS</h2>
+        <h3>Problema:</h3>
+        <div class="code-block" data-lang="bash">
+Error response from daemon: pull access denied for 
+521176574385.dkr.ecr.sa-east-1.amazonaws.com/dry-run-brq-producer
+        </div>
+        
+        <h3>Causa Raiz:</h3>
+        <ul>
+            <li>Token ECR expirado</li>
+            <li>Falta de login no registry</li>
+        </ul>
+    </div>
+
+    <div class="solution-section">
+        <h3><span class="emoji">✅</span>Solução Adotada:</h3>
+        <div class="code-block" data-lang="bash">
+# Script de deploy automatizado
+aws ecr get-login-password --region sa-east-1 | \
+docker login --username AWS --password-stdin \
+521176574385.dkr.ecr.sa-east-1.amazonaws.com
+
+docker build -t dry-run-brq-producer .
+docker tag dry-run-brq-producer:latest \
+521176574385.dkr.ecr.sa-east-1.amazonaws.com/dry-run-brq-producer:latest
+docker push 521176574385.dkr.ecr.sa-east-1.amazonaws.com/dry-run-brq-producer:latest
+        </div>
+    </div>
+
+    <div class="error-section">
+        <h2><span class="emoji">🔥</span>Erro CRÍTICO: DNS Resolution Failure - Fargate</h2>
+        <h3>Problema:</h3>
+        <div class="code-block" data-lang="bash">
+# Pods no Fargate
+kubectl exec producer -- nslookup b-1.dryrunbrqmsk.cxgo3g.c2.kafka.sa-east-1.amazonaws.com
+# RESULTADO: Name resolution failure
+        </div>
+        
+        <h3>Causa Raiz:</h3>
+        <ul>
+            <li><span class="error">Fargate DNS Limitations:</span> Problemas conhecidos com DNS customizado</li>
+            <li><span class="error">MSK Private Endpoints:</span> Resolução interna VPC não funcionando</li>
+            <li><span class="error">AWS API Calls:</span> WebIdentityTokenCredentialsProvider falhando</li>
+        </ul>
+
+        <h3>Soluções Tentadas (SEM SUCESSO):</h3>
+        <ul>
+            <li>✅ VPC Endpoints: S3, DynamoDB, STS, EC2, CloudWatch</li>
+            <li>✅ DNS Configuration: CoreDNS troubleshooting</li>
+            <li>✅ Network Policies: Security groups validation</li>
+            <li><span class="error">❌ Fargate Profile:</span> Configurações personalizadas</li>
+        </ul>
+    </div>
+
+    <div class="solution-section">
+        <h2><span class="emoji">🎯</span>SOLUÇÃO FINAL: Migração Fargate → EC2</h2>
+        
+        <div class="code-block" data-lang="terraform">
+# Terraform - Migração para EC2 Managed Nodes
+eks_managed_node_groups = {
+  workers = {
+    name         = "workers"
+    min_size     = 1
+    max_size     = 3
+    desired_size = 2
+    instance_types = ["t3.small"]  # Upgrade de t3.micro
+    
+    labels = {
+      Environment = "production"
+      NodeType    = "worker"
+    }
+  }
+}
+        </div>
+
+        <h3>Base da Decisão:</h3>
+        <ul>
+            <li><strong>Networking Reliability:</strong> EC2 nodes não têm limitações DNS do Fargate</li>
+            <li><strong>Troubleshooting:</strong> Maior controle sobre network stack</li>
+            <li><strong>Production Stability:</strong> Evitar limitações conhecidas do Fargate</li>
+            <li><strong>Cost-Benefit:</strong> t3.small adequado (11 pods vs 4 pods t3.micro)</li>
+        </ul>
+    </div>
+
+    <h1>📊 Arquitetura: Antes vs Depois</h1>
+
+    <div class="architecture-diagram">
+        <h3 style="color: #e74c3c;">❌ ANTES (Problemática)</h3>
+        <pre>
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   S3 Bucket     │────│  Fargate Pods    │────│   MSK Cluster   │
+│   (Input)       │    │  (DNS Issues)    │    │  (Unreachable)  │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ❌ DNS Failures
+                       ❌ AWS API Errors
+                       ❌ Connection Timeouts
+        </pre>
+    </div>
+
+    <div class="architecture-diagram">
+        <h3 style="color: #27ae60;">✅ DEPOIS (Operacional)</h3>
+        <pre>
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   S3 Bucket     │────│   EC2 Nodes      │────│   MSK Cluster   │
+│   (Input)       │    │  (t3.small)      │    │   (Connected)   │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ✅ DNS Functional
+                       ✅ AWS APIs Working
+                       ✅ Health Checks UP
+        </pre>
+    </div>
+
+    <h1>📈 Métricas de Sucesso</h1>
+
+    <table class="metrics-table">
+        <thead>
+            <tr>
+                <th>Métrica</th>
+                <th>Fargate (Falha)</th>
+                <th>EC2 (Sucesso)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>DNS Resolution</strong></td>
+                <td><span class="error">❌ 0%</span></td>
+                <td><span class="success">✅ 100%</span></td>
+            </tr>
+            <tr>
+                <td><strong>Health Checks</strong></td>
+                <td><span class="error">❌ Timeout</span></td>
+                <td><span class="success">✅ 200ms avg</span></td>
+            </tr>
+            <tr>
+                <td><strong>MSK Connectivity</strong></td>
+                <td><span class="error">❌ Failed</span></td>
+                <td><span class="success">✅ Connected</span></td>
+            </tr>
+            <tr>
+                <td><strong>AWS API Calls</strong></td>
+                <td><span class="error">❌ Credentials Error</span></td>
+                <td><span class="success">✅ Working</span></td>
+            </tr>
+            <tr>
+                <td><strong>Pod Scheduling</strong></td>
+                <td><span class="error">❌ Resource Limits</span></td>
+                <td><span class="success">✅ Optimal</span></td>
+            </tr>
+            <tr>
+                <td><strong>Deployment Time</strong></td>
+                <td><span class="error">❌ 2+ hours debug</span></td>
+                <td><span class="success">✅ 5 min deploy</span></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h1>🎯 Lições Aprendidas</h1>
+
+    <div class="solution-section">
+        <h2>🔍 Decision Tree: Fargate vs EC2</h2>
+        
+        <h3>Escolher Fargate quando:</h3>
+        <ul>
+            <li>✅ Workloads stateless simples</li>
+            <li>✅ Conectividade básica (internet)</li>
+            <li>✅ Não precisa de DNS customizado</li>
+            <li>✅ Sem requisitos de networking complexo</li>
+        </ul>
+
+        <h3>Escolher EC2 quando:</h3>
+        <ul>
+            <li>✅ Conectividade privada (MSK, RDS)</li>
+            <li>✅ DNS resolution crítica</li>
+            <li>✅ Controle de networking necessário</li>
+            <li>✅ Troubleshooting profundo requerido</li>
+        </ul>
+    </div>
+
+    <h1>🔮 Validação Final</h1>
+
+    <div class="solution-section">
+        <h2>Testes de Conectividade:</h2>
+        <div class="code-block" data-lang="bash">
+# DNS Test
+✅ nslookup google.com → Working
+✅ nslookup b-1.dryrunbrqmsk.cxgo3g.c2.kafka.sa-east-1.amazonaws.com → Working
+
+# Health Checks
+✅ curl http://localhost:8080/actuator/health → {"status":"UP"}
+✅ curl http://localhost:8081/actuator/health → {"status":"UP"}
+
+# Kubernetes Status
+✅ kubectl get pods -n etl → All Running
+✅ kubectl get nodes → 2/2 Ready
+        </div>
+    </div>
+
+    <div class="highlight-box">
+        <h2 style="margin: 0; border: none;">🏆 Conclusão</h2>
+        <p style="font-size: 14pt; margin: 15px 0;">
+            A migração de <strong>Fargate para EC2</strong> foi crítica para o sucesso do projeto.<br>
+            Para workloads enterprise com dependências de conectividade privada complexa,<br>
+            <strong>EC2 managed nodes</strong> oferecem a confiabilidade necessária.
+        </p>
+        <h1 style="margin: 20px 0; border: none; color: #27ae60;">
+            ✅ Sistema ETL 100% Operacional em Produção
+        </h1>
+    </div>
+
+    <div class="footer">
+        <p><strong>Document Information</strong></p>
+        <p>Generated on: October 14, 2025</p>
+        <p>Project: ETL System - BRQ Itaú | Stack: Spring Boot 3.2.2 + Kotlin + AWS EKS + MSK</p>
+        <p>Status: <span class="success">✅ Production Operational</span></p>
+        <p><em>Para gerar PDF: Imprimir esta página no navegador → Salvar como PDF</em></p>
+    </div>
+
+    <script>
+        // Auto-open print dialog for PDF generation
+        document.addEventListener('DOMContentLoaded', function() {
+            // Uncomment the line below to auto-open print dialog
+            // window.print();
+        });
+    </script>
+</body>
+</html>

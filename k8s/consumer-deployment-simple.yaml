@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etl-consumer
+  namespace: etl
+  labels:
+    app: etl-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etl-consumer
+  template:
+    metadata:
+      labels:
+        app: etl-consumer
+    spec:
+      serviceAccountName: sa-consumer
+      containers:
+      - name: consumer
+        image: 521176574385.dkr.ecr.sa-east-1.amazonaws.com/dry-run-brq-consumer:latest
+        ports:
+        - containerPort: 8081
+        env:
+        - name: AWS_REGION
+          value: "sa-east-1"
+        - name: SPRING_PROFILES_ACTIVE
+          value: "aws"
+        - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+          value: "localhost:9092"  # Placeholder - será atualizado quando MSK estiver pronto
+        - name: SPRING_KAFKA_CONSUMER_GROUP_ID
+          value: "etl-consumer-group"
+        - name: DYNAMODB_TRANSACTIONS_TABLE
+          value: "dry-run-brq-transactions"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8081
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etl-consumer-service
+  namespace: etl
+spec:
+  selector:
+    app: etl-consumer
+  ports:
+  - protocol: TCP
+    port: 8081
+    targetPort: 8081
+  type: ClusterIP

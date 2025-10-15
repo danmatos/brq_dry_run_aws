@@ -1,0 +1,52 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: etl-producer
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+app:
+  project-name: ${PROJECT_NAME:aws-eks-msk-starter}
+  s3:
+    input-bucket: ${S3_INPUT_BUCKET:}
+    rejected-bucket: ${S3_REJECTED_BUCKET:}
+  dynamodb:
+    processed-files-table: ${DYNAMODB_PROCESSED_FILES_TABLE:}
+  kafka:
+    topics:
+      transactions: ${KAFKA_TRANSACTIONS_TOPIC:transactions}
+  scheduler:
+    file-processing-delay: ${FILE_PROCESSING_DELAY:30000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      cloudwatch:
+        enabled: true
+        namespace: ETL/Producer
+        step: 1m
+      prometheus:
+        enabled: true
+    tags:
+      application: etl-producer
+      environment: production
+
+logging:
+  level:
+    br.com.itau.etl: INFO
+    org.apache.kafka: WARN
+    software.amazon.awssdk: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

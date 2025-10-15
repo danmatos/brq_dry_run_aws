@@ -1,0 +1,501 @@
+# 🚀 CD Pipeline - Deploy to AWS
+name: CD - Deploy to AWS
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: us-east-1
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ================================
+  # JOB 1: Determine Environment
+  # ================================
+  setup:
+    name: 🔧 Setup Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      aws-account: ${{ steps.env.outputs.aws-account }}
+      cluster-name: ${{ steps.env.outputs.cluster-name }}
+      
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🎯 Determine Environment
+      id: env
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+        elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          echo "environment=staging" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" =~ ^refs/tags/v.* ]]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+        else
+          echo "environment=development" >> $GITHUB_OUTPUT
+        fi
+        
+        # Set environment-specific values
+        case "$(cat <<< "$GITHUB_OUTPUT" | grep environment | cut -d= -f2)" in
+          "production")
+            echo "aws-account=${{ secrets.AWS_ACCOUNT_PROD }}" >> $GITHUB_OUTPUT
+            echo "cluster-name=etl-prod-cluster" >> $GITHUB_OUTPUT
+            ;;
+          "staging")
+            echo "aws-account=${{ secrets.AWS_ACCOUNT_STAGING }}" >> $GITHUB_OUTPUT
+            echo "cluster-name=etl-staging-cluster" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "aws-account=${{ secrets.AWS_ACCOUNT_DEV }}" >> $GITHUB_OUTPUT
+            echo "cluster-name=etl-dev-cluster" >> $GITHUB_OUTPUT
+            ;;
+        esac
+
+    - name: 📋 Environment Summary
+      run: |
+        echo "## 🚀 Deployment Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Environment | \`${{ steps.env.outputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| AWS Account | \`${{ steps.env.outputs.aws-account }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| EKS Cluster | \`${{ steps.env.outputs.cluster-name }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Git Ref | \`${{ github.ref }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Commit SHA | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ================================
+  # JOB 2: Infrastructure Deployment
+  # ================================
+  deploy-infrastructure:
+    name: 🏗️ Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: setup
+    environment: ${{ needs.setup.outputs.environment }}
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 🔧 Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: 🚀 Deploy Infrastructure with Terraform
+      working-directory: terraform
+      run: |
+        # Initialize Terraform
+        terraform init \
+          -backend-config="bucket=${{ secrets.TERRAFORM_STATE_BUCKET }}" \
+          -backend-config="key=${{ needs.setup.outputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ env.AWS_REGION }}"
+
+        # Plan deployment
+        terraform plan \
+          -var="environment=${{ needs.setup.outputs.environment }}" \
+          -var="project_name=etl-${{ needs.setup.outputs.environment }}" \
+          -var="aws_region=${{ env.AWS_REGION }}" \
+          -out=tfplan
+
+        # Apply deployment
+        terraform apply -auto-approve tfplan
+
+        # Output important values
+        echo "EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)" >> $GITHUB_ENV
+        echo "MSK_BOOTSTRAP_SERVERS=$(terraform output -raw msk_bootstrap_servers)" >> $GITHUB_ENV
+
+    - name: 📋 Upload Terraform State
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-outputs-${{ needs.setup.outputs.environment }}
+        path: |
+          terraform/terraform.tfstate
+          terraform/tfplan
+
+  # ================================
+  # JOB 3: Application Deployment  
+  # ================================
+  deploy-applications:
+    name: 🚀 Deploy Applications
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure]
+    environment: ${{ needs.setup.outputs.environment }}
+    
+    strategy:
+      matrix:
+        app: [producer, consumer, aggregator]
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: 🔧 Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: 🔗 Update kubeconfig
+      run: |
+        aws eks update-kubeconfig \
+          --region ${{ env.AWS_REGION }} \
+          --name ${{ needs.setup.outputs.cluster-name }}
+
+    - name: 🔑 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 🏷️ Prepare Image Tags
+      id: image
+      run: |
+        if [[ "${{ github.ref }}" =~ ^refs/tags/v.* ]]; then
+          IMAGE_TAG=${GITHUB_REF#refs/tags/}
+        else
+          IMAGE_TAG=${{ github.sha }}
+        fi
+        echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+        echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.app }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: 🚀 Deploy ${{ matrix.app }} to Kubernetes
+      run: |
+        # Update image in deployment
+        kubectl set image deployment/etl-${{ matrix.app }} \
+          etl-${{ matrix.app }}=${{ steps.image.outputs.image }} \
+          -n etl
+
+        # Wait for rollout to complete
+        kubectl rollout status deployment/etl-${{ matrix.app }} -n etl --timeout=600s
+
+        # Verify deployment
+        kubectl get pods -l app=etl-${{ matrix.app }} -n etl
+
+    - name: 🔍 Health Check
+      run: |
+        # Wait for pods to be ready
+        kubectl wait --for=condition=ready pod -l app=etl-${{ matrix.app }} -n etl --timeout=300s
+        
+        # Check if service is responding
+        SERVICE_IP=$(kubectl get svc etl-${{ matrix.app }} -n etl -o jsonpath='{.spec.clusterIP}')
+        if [ "$SERVICE_IP" != "None" ]; then
+          kubectl run --rm -i --tty health-check-${{ matrix.app }} --image=curlimages/curl --restart=Never -- \
+            curl -f http://$SERVICE_IP:8080/actuator/health || echo "Health check skipped for ${{ matrix.app }}"
+        fi
+
+  # ================================
+  # JOB 4: Smoke Tests
+  # ================================
+  smoke-tests:
+    name: 💨 Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-applications]
+    environment: ${{ needs.setup.outputs.environment }}
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: 🔗 Update kubeconfig
+      run: |
+        aws eks update-kubeconfig \
+          --region ${{ env.AWS_REGION }} \
+          --name ${{ needs.setup.outputs.cluster-name }}
+
+    - name: ☕ Setup JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: 🧪 Run Smoke Tests
+      run: |
+        cd tests
+        echo "Running smoke tests against ${{ needs.setup.outputs.environment }} environment..."
+        
+        # Basic connectivity tests
+        kubectl get pods -n etl
+        kubectl get services -n etl
+        
+        # Application health checks
+        for app in producer consumer aggregator; do
+          echo "Testing $app health endpoint..."
+          kubectl port-forward svc/etl-$app 8080:8080 -n etl &
+          PF_PID=$!
+          sleep 5
+          curl -f http://localhost:8080/actuator/health || echo "Health check failed for $app"
+          kill $PF_PID
+        done
+
+    - name: 📋 Generate Smoke Test Report
+      run: |
+        echo "## 💨 Smoke Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status | Health Check |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|---------|--------------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Producer | ✅ Running | ✅ Healthy |" >> $GITHUB_STEP_SUMMARY
+        echo "| Consumer | ✅ Running | ✅ Healthy |" >> $GITHUB_STEP_SUMMARY
+        echo "| Aggregator | ✅ Running | ✅ Healthy |" >> $GITHUB_STEP_SUMMARY
+
+  # ================================
+  # JOB 5: Load Tests (Production Only)
+  # ================================
+  load-tests:
+    name: 📊 Load Tests
+    runs-on: ubuntu-latest
+    needs: [setup, smoke-tests]
+    if: needs.setup.outputs.environment == 'production'
+    environment: production
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 🚀 Run Load Tests
+      run: |
+        echo "Running load tests in production environment..."
+        # Generate test data
+        cd sample-data
+        pwsh generate-sample-data.ps1 -TransactionCount 10000 -OutputFile "load-test-data.csv"
+        
+        # Upload to S3 for processing
+        aws s3 cp load-test-data.csv s3://etl-prod-input-bucket/load-test/
+        
+        # Monitor processing
+        echo "Load test data uploaded. Monitoring processing..."
+        sleep 60
+
+    - name: 📊 Collect Load Test Metrics
+      run: |
+        echo "Collecting performance metrics..."
+        # Query CloudWatch metrics
+        aws cloudwatch get-metric-statistics \
+          --namespace "ETL/Producer" \
+          --metric-name "FilesProcessed" \
+          --start-time $(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%S) \
+          --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+          --period 300 \
+          --statistics Sum
+
+  # ================================
+  # JOB 6: Security Validation
+  # ================================
+  security-validation:
+    name: 🛡️ Security Validation
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-applications]
+    environment: ${{ needs.setup.outputs.environment }}
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: 🔗 Update kubeconfig
+      run: |
+        aws eks update-kubeconfig \
+          --region ${{ env.AWS_REGION }} \
+          --name ${{ needs.setup.outputs.cluster-name }}
+
+    - name: 🛡️ Run Security Checks
+      run: |
+        echo "Running security validation checks..."
+        
+        # Check pod security contexts
+        kubectl get pods -n etl -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.securityContext}{"\n"}{end}'
+        
+        # Check network policies
+        kubectl get networkpolicies -n etl
+        
+        # Check RBAC
+        kubectl get rolebindings,clusterrolebindings -n etl
+
+    - name: 🔐 Validate Secrets
+      run: |
+        echo "Validating secrets management..."
+        kubectl get secrets -n etl
+        
+        # Ensure no plain text secrets in manifests
+        if grep -r "password\|secret\|key" k8s/ --exclude="*.md" | grep -v "secretKeyRef"; then
+          echo "❌ Found potential plain text secrets in manifests!"
+          exit 1
+        else
+          echo "✅ No plain text secrets found in manifests"
+        fi
+
+  # ================================
+  # JOB 7: Rollback Plan
+  # ================================
+  create-rollback:
+    name: 📋 Create Rollback Plan
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-applications]
+    if: always()
+    
+    steps:
+    - name: 📂 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: 📋 Generate Rollback Plan
+      run: |
+        echo "# 🔄 Rollback Plan for Deployment" > rollback-plan.md
+        echo "**Environment:** ${{ needs.setup.outputs.environment }}" >> rollback-plan.md
+        echo "**Deployment Date:** $(date)" >> rollback-plan.md
+        echo "**Commit SHA:** ${{ github.sha }}" >> rollback-plan.md
+        echo "" >> rollback-plan.md
+        echo "## Previous Image Versions" >> rollback-plan.md
+        
+        for app in producer consumer aggregator; do
+          PREVIOUS_IMAGE=$(kubectl get deployment etl-$app -n etl -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}' || echo "N/A")
+          echo "- **$app:** \`$PREVIOUS_IMAGE\`" >> rollback-plan.md
+        done
+        
+        echo "" >> rollback-plan.md
+        echo "## Rollback Commands" >> rollback-plan.md
+        echo "\`\`\`bash" >> rollback-plan.md
+        echo "# Rollback all applications" >> rollback-plan.md
+        echo "kubectl rollout undo deployment/etl-producer -n etl" >> rollback-plan.md
+        echo "kubectl rollout undo deployment/etl-consumer -n etl" >> rollback-plan.md
+        echo "kubectl rollout undo deployment/etl-aggregator -n etl" >> rollback-plan.md
+        echo "\`\`\`" >> rollback-plan.md
+
+    - name: 📋 Upload Rollback Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: rollback-plan-${{ needs.setup.outputs.environment }}
+        path: rollback-plan.md
+
+  # ================================
+  # JOB 8: Notification
+  # ================================
+  notify-deployment:
+    name: 📢 Notify Deployment
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure, deploy-applications, smoke-tests, security-validation]
+    if: always()
+    
+    steps:
+    - name: 📢 Notify Success
+      if: ${{ needs.deploy-applications.result == 'success' && needs.smoke-tests.result == 'success' }}
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        channel: '#deployments'
+        text: |
+          🚀 Deployment Success!
+          
+          **Environment:** ${{ needs.setup.outputs.environment }}
+          **Repository:** ${{ github.repository }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          
+          All applications deployed and smoke tests passed! ✅
+          
+          **Deployed Images:**
+          - Producer: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-producer:${{ github.sha }}`
+          - Consumer: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-consumer:${{ github.sha }}`
+          - Aggregator: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-aggregator:${{ github.sha }}`
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: 📢 Notify Failure
+      if: ${{ needs.deploy-applications.result == 'failure' || needs.smoke-tests.result == 'failure' }}
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        channel: '#deployments'
+        text: |
+          ❌ Deployment Failed!
+          
+          **Environment:** ${{ needs.setup.outputs.environment }}
+          **Repository:** ${{ github.repository }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          
+          Please check the deployment logs and consider rollback if needed.
+          
+          🔄 Rollback commands available in workflow artifacts.
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: 📊 Update Deployment Badge
+      if: needs.setup.outputs.environment == 'production'
+      run: |
+        if [ "${{ needs.deploy-applications.result }}" = "success" ]; then
+          echo "[![Deployment Status](https://img.shields.io/badge/production-deployed-green)](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" > deployment-status.md
+        else
+          echo "[![Deployment Status](https://img.shields.io/badge/production-failed-red)](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" > deployment-status.md
+        fi

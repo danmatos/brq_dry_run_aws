@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-aggregator
+  namespace: etl
+  annotations:
+    eks.amazonaws.com/role-arn: ROLE_ARN_AGGREGATOR # substitua pelo output 'sa_aggregator_role_arn'

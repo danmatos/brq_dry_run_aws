@@ -45,9 +45,9 @@ dependencies {
     testImplementation("com.ninja-squad:springmockk:4.0.2")
     
     // TestContainers for integration testing
-    testImplementation("org.testcontainers:junit-jupiter:1.19.3")
-    testImplementation("org.testcontainers:kafka:1.19.3")
-    testImplementation("org.testcontainers:localstack:1.19.3")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.3")
+    testImplementation("org.testcontainers:kafka:1.21.3")
+    testImplementation("org.testcontainers:localstack:1.21.3")
     
     // Async testing support
     testImplementation("org.awaitility:awaitility-kotlin:4.2.0")

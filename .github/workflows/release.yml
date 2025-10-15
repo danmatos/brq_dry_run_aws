@@ -111,7 +111,7 @@ jobs:
         distribution: 'temurin'
 
     - name: 🐘 Setup Gradle
-      uses: gradle/gradle-build-action@v2
+      uses: gradle/gradle-build-action@v3
 
     - name: 🏗️ Build Release JAR
       run: |
@@ -269,7 +269,7 @@ jobs:
         distribution: 'temurin'
 
     - name: 🐘 Setup Gradle
-      uses: gradle/gradle-build-action@v2
+      uses: gradle/gradle-build-action@v3
 
     - name: 🧪 Run Full Test Suite
       run: |

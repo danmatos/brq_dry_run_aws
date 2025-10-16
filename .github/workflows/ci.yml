@@ -252,7 +252,7 @@ jobs:
 
     - name: 🐳 Build and Push Docker Image
       id: build
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: apps/${{ matrix.app }}
         file: apps/${{ matrix.app }}/Dockerfile
